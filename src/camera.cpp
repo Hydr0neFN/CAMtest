@@ -44,6 +44,24 @@ esp_err_t camera_init(void)
         return err;
     }
 
+    // Apply sensor-level image orientation corrections — zero CPU cost.
+    // Top-to-top breadboard mounting rotates one PCB 180° in-plane, which is
+    // equivalent to vflip=1 AND hmirror=1 together (a 180° image rotation).
+    // hmirror must be ON so the secondary's X axis runs left-to-right the same
+    // way as the primary — critical for disparity to have the correct sign.
+    sensor_t *s = esp_camera_sensor_get();
+    if (s) {
+#ifdef CAM_ROLE_SECONDARY
+        s->set_vflip(s, 1);    // Correct upside-down rows
+        s->set_hmirror(s, 1);  // Correct left-right mirror from 180° rotation
+        ESP_LOGI(TAG, "Secondary: vflip ON, hmirror ON (top-to-top mount)");
+#else
+        s->set_vflip(s, 0);
+        s->set_hmirror(s, 0);
+        ESP_LOGI(TAG, "Primary: vflip OFF, hmirror OFF");
+#endif
+    }
+
     ESP_LOGI(TAG, "Camera initialized: GRAYSCALE SVGA 800x600, 2 frame buffers in PSRAM");
     return ESP_OK;
 }

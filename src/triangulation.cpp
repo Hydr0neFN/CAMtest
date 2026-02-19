@@ -13,18 +13,29 @@ static float get_focal_px(void)
     return s_focal_px;
 }
 
-float triangulate_distance(uint16_t x_primary, uint16_t x_secondary)
+float triangulate_distance(uint16_t px, uint16_t py,
+                           uint16_t sx, uint16_t sy)
 {
-    int disparity = (int)x_primary - (int)x_secondary;
-
-    if (disparity < STEREO_MIN_DISPARITY) {
-        return -1.0f;  // Object too far, or blob match is wrong
+    // X-component sanity: secondary (LEFT) must see blob further right
+    // than primary (RIGHT) for a valid forward object.
+    int dx = (int)sx - (int)px;
+    if (dx < STEREO_MIN_DISPARITY) {
+        return -1.0f;
     }
 
-    float distance = (STEREO_BASELINE_M * get_focal_px()) / (float)disparity;
+    // 2D disparity — works when the bike leans and the baseline rotates.
+    // When upright, dy ≈ 0 and this reduces to the standard X-only formula.
+    int dy = (int)sy - (int)py;
+    float disparity = sqrtf((float)(dx * dx + dy * dy));
 
-    // Sanity bounds: closer than handlebars or beyond any useful headlight range
-    if (distance < 0.5f || distance > 200.0f) {
+    if (disparity < (float)STEREO_MIN_DISPARITY) {
+        return -1.0f;
+    }
+
+    float distance = (STEREO_BASELINE_M * get_focal_px()) / disparity;
+
+    // Sanity bounds
+    if (distance < 0.5f || distance > 80.0f) {
         return -1.0f;
     }
 

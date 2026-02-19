@@ -189,13 +189,44 @@ static void detection_task(void *arg)
         // Non-blocking read — use whatever is in the UART buffer
         recv_blobs_uart(secondary_blobs, &secondary_count);
 
-        // Triangulate: match largest blob on each camera (simplest strategy)
+        // Triangulate: match primary blobs to secondary.
+        // Uses 2D proximity + positive X-disparity check.
+        // No strict cy-only epipolar — works when bike leans and baseline tilts.
         float distance_m = -1.0f;
+        int   match_pri  = -1;
+        int   match_sec  = -1;
         if (result.blob_count > 0 && secondary_count > 0) {
-            // TODO: improve matching — use cy proximity (epipolar constraint)
-            //       to handle scenes where each camera sees a different blob.
-            distance_m = triangulate_distance(result.blobs[0].cx,
-                                              secondary_blobs[0].cx);
+            int best_score = 0x7FFFFFFF;
+            for (int pi = 0; pi < result.blob_count; pi++) {
+                for (int si = 0; si < secondary_count; si++) {
+                    // X-disparity must be positive (secondary LEFT sees blob
+                    // further right than primary RIGHT for forward objects)
+                    int dx = (int)secondary_blobs[si].cx - (int)result.blobs[pi].cx;
+                    if (dx < STEREO_MIN_DISPARITY) continue;
+
+                    // Total 2D distance between centroids — cap at reasonable max
+                    int dy = (int)secondary_blobs[si].cy - (int)result.blobs[pi].cy;
+                    int dist2d = dx + (dy < 0 ? -dy : dy);  // Manhattan approx
+                    if (dist2d > 200) continue;  // Too far apart — not same object
+
+                    // Score: prefer close 2D match, then large blobs
+                    int size_bonus = (int)(result.blobs[pi].pixel_count > 10000
+                                          ? 10000 : result.blobs[pi].pixel_count);
+                    int score = dist2d * 10 - size_bonus;
+                    if (score < best_score) {
+                        best_score = score;
+                        match_pri  = pi;
+                        match_sec  = si;
+                    }
+                }
+            }
+            if (match_pri >= 0) {
+                distance_m = triangulate_distance(
+                    result.blobs[match_pri].cx,
+                    result.blobs[match_pri].cy,
+                    secondary_blobs[match_sec].cx,
+                    secondary_blobs[match_sec].cy);
+            }
         }
 
         // --- Serial report ---
@@ -222,17 +253,41 @@ static void detection_task(void *arg)
         }
 
         if (secondary_count > 0) {
-            Serial.printf("  Secondary: %d blob(s), blob[0] cx=%u\n",
-                          secondary_count,
-                          (unsigned)secondary_blobs[0].cx);
+            Serial.printf("  Secondary: %d blob(s)", secondary_count);
+            for (int si = 0; si < secondary_count; si++) {
+                Serial.printf(" [%d](%u,%u)", si,
+                              (unsigned)secondary_blobs[si].cx,
+                              (unsigned)secondary_blobs[si].cy);
+            }
+            Serial.println();
         } else {
             Serial.println("  Secondary: no data");
         }
 
-        if (distance_m > 0.0f) {
-            Serial.printf("  Distance: %.2f m\n", distance_m);
+        if (match_pri >= 0) {
+            int mdx = (int)secondary_blobs[match_sec].cx - (int)result.blobs[match_pri].cx;
+            int mdy = (int)secondary_blobs[match_sec].cy - (int)result.blobs[match_pri].cy;
+            if (distance_m > 0.0f) {
+                Serial.printf("  Match: pri[%d](%u,%u)<->sec[%d](%u,%u) dx=%d dy=%d => %.2f m\n",
+                              match_pri,
+                              (unsigned)result.blobs[match_pri].cx,
+                              (unsigned)result.blobs[match_pri].cy,
+                              match_sec,
+                              (unsigned)secondary_blobs[match_sec].cx,
+                              (unsigned)secondary_blobs[match_sec].cy,
+                              mdx, mdy, distance_m);
+            } else {
+                Serial.printf("  Match: pri[%d](%u,%u)<->sec[%d](%u,%u) dx=%d dy=%d => N/A\n",
+                              match_pri,
+                              (unsigned)result.blobs[match_pri].cx,
+                              (unsigned)result.blobs[match_pri].cy,
+                              match_sec,
+                              (unsigned)secondary_blobs[match_sec].cx,
+                              (unsigned)secondary_blobs[match_sec].cy,
+                              mdx, mdy);
+            }
         } else {
-            Serial.println("  Distance: N/A");
+            Serial.println("  Distance: N/A (no match)");
         }
 #endif  // CAM_ROLE_PRIMARY
     }

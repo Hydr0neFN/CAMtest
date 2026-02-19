@@ -90,26 +90,37 @@ void detect_blobs(const uint8_t *pixels, int width, int height,
                 continue;
             }
 
-            // Look at already-visited neighbors: left and above
-            uint16_t left  = (x > 0)  ? labels[ri - 1]     : 0;
-            uint16_t above = (ry > 0) ? labels[ri - width]  : 0;
+            // Look at already-visited neighbors (8-connectivity):
+            // left, above-left, above, above-right
+            uint16_t left  = (x > 0)               ? labels[ri - 1]         : 0;
+            uint16_t above = (ry > 0)               ? labels[ri - width]     : 0;
+            uint16_t a_l   = (ry > 0 && x > 0)     ? labels[ri - width - 1] : 0;
+            uint16_t a_r   = (ry > 0 && x < width-1)? labels[ri - width + 1] : 0;
 
-            if (left == 0 && above == 0) {
+            // Collect all non-zero neighbor labels
+            uint16_t neighbors[4] = { left, above, a_l, a_r };
+            uint16_t min_lbl = 0;
+            for (int k = 0; k < 4; k++) {
+                if (neighbors[k] != 0) {
+                    if (min_lbl == 0 || neighbors[k] < min_lbl)
+                        min_lbl = neighbors[k];
+                }
+            }
+
+            if (min_lbl == 0) {
                 // New blob
                 if (next_label < MAX_LABELS) {
                     labels[ri] = next_label++;
                 } else {
                     labels[ri] = 0; // Too many labels, skip
                 }
-            } else if (left != 0 && above == 0) {
-                labels[ri] = left;
-            } else if (left == 0 && above != 0) {
-                labels[ri] = above;
             } else {
-                // Both neighbors labeled — take the smaller and merge
-                labels[ri] = (left < above) ? left : above;
-                if (left != above) {
-                    uf_union(left, above);
+                labels[ri] = min_lbl;
+                // Union all neighbor labels together
+                for (int k = 0; k < 4; k++) {
+                    if (neighbors[k] != 0 && neighbors[k] != min_lbl) {
+                        uf_union(min_lbl, neighbors[k]);
+                    }
                 }
             }
         }
@@ -163,9 +174,16 @@ void detect_blobs(const uint8_t *pixels, int width, int height,
         if (a->pixel_count > MAX_BLOB_PIXELS)  continue;
 
         if (result->blob_count < MAX_BLOBS) {
+            uint16_t cx = (uint16_t)(a->sum_x / a->pixel_count);
+            uint16_t cy = (uint16_t)(a->sum_y / a->pixel_count);
+
+            // Reject blobs at the sensor edge — vflip/hmirror can create
+            // bright-line artifacts in the first/last few rows.
+            if (cy < 3 || cy > (uint16_t)(height - 4)) continue;
+
             blob_t *b = &result->blobs[result->blob_count];
-            b->cx             = (uint16_t)(a->sum_x / a->pixel_count);
-            b->cy             = (uint16_t)(a->sum_y / a->pixel_count);
+            b->cx             = cx;
+            b->cy             = cy;
             b->pixel_count    = a->pixel_count;
             b->brightness_sum = a->brightness_sum;
             result->blob_count++;
@@ -181,6 +199,42 @@ void detect_blobs(const uint8_t *pixels, int width, int height,
             j--;
         }
         result->blobs[j + 1] = tmp;
+    }
+
+    // --- Merge nearby blobs ---
+    // Phone flashlights often have 2 LED dies that produce separate blobs.
+    // Merge any pair whose centroids are within BLOB_MERGE_DIST pixels.
+    for (int i = 0; i < result->blob_count; i++) {
+        for (int j = i + 1; j < result->blob_count; ) {
+            int dx = (int)result->blobs[i].cx - (int)result->blobs[j].cx;
+            int dy = (int)result->blobs[i].cy - (int)result->blobs[j].cy;
+            int dist = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+
+            if (dist <= BLOB_MERGE_DIST) {
+                // Weighted-average centroid merge into blob i
+                uint32_t total_pc = result->blobs[i].pixel_count +
+                                    result->blobs[j].pixel_count;
+                result->blobs[i].cx = (uint16_t)(
+                    ((uint32_t)result->blobs[i].cx * result->blobs[i].pixel_count +
+                     (uint32_t)result->blobs[j].cx * result->blobs[j].pixel_count)
+                    / total_pc);
+                result->blobs[i].cy = (uint16_t)(
+                    ((uint32_t)result->blobs[i].cy * result->blobs[i].pixel_count +
+                     (uint32_t)result->blobs[j].cy * result->blobs[j].pixel_count)
+                    / total_pc);
+                result->blobs[i].brightness_sum += result->blobs[j].brightness_sum;
+                result->blobs[i].pixel_count = total_pc;
+
+                // Remove blob j by shifting remaining blobs down
+                for (int k = j; k < result->blob_count - 1; k++) {
+                    result->blobs[k] = result->blobs[k + 1];
+                }
+                result->blob_count--;
+                // Don't increment j — check new blob at same index
+            } else {
+                j++;
+            }
+        }
     }
 
     heap_caps_free(accs);

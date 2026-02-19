@@ -42,6 +42,7 @@
 #define MIN_BLOB_PIXELS        16   // Ignore blobs smaller than this (noise)
 #define MAX_BLOB_PIXELS     70000   // Ignore blobs larger than this (whole-frame wash)
 #define MAX_BLOBS               16  // Max number of blobs to track per frame
+#define BLOB_MERGE_DIST         30  // Merge blobs whose centroids are within this many px
 
 // Region of interest — restrict detection to a vertical band (horizon area)
 // Set both to 0 to use the full frame
@@ -68,7 +69,7 @@
 // ---------------------------------------------------------------------------
 // Baseline: physical separation (metres) between the two camera lenses.
 // Adjust STEREO_BASELINE_M to your actual mount before trusting distance readings.
-#define STEREO_BASELINE_M      0.15f   // 15 cm default — measure and update!
+#define STEREO_BASELINE_M      0.1208f // 120.8 mm measured lens-to-lens on breadboard
 
 // OV2640 horizontal FOV. At SVGA the effective HFOV is approximately 62°.
 // This is an approximation — calibrate against a known-distance target for accuracy.
