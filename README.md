@@ -1,3 +1,5 @@
+**English** · [繁體中文](README.zh-TW.md)
+
 # CAMtest
 
 Dual **ESP32-CAM** stereo-vision experiment: triangulate the position of an
